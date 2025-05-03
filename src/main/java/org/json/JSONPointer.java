@@ -283,5 +283,17 @@ public class JSONPointer {
             throw new RuntimeException(e);
         }
     }
+
+    /**
+     * Unescapes a JSON Pointer token value.
+     * This method provides public access to the unescaping functionality 
+     * for use by other classes in the library.
+     * 
+     * @param token the token to unescape
+     * @return the unescaped token value
+     */
+    public static String unescapeToken(String token) {
+        return unescape(token);
+    }
     
 }

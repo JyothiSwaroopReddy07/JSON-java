@@ -1426,6 +1426,171 @@ public class XMLTest {
         assertEquals(jsonObject3.getJSONObject("color").getString("value"), "008E97");
     }
 
+    /**
+     * Test Case 1: Basic path extraction from simple XML
+     * 
+     * This tests the basic functionality of extracting a JSON object at a specific path
+     * from a simple XML document.
+     */
+    @Test
+    public void testBasicPathExtraction() throws Exception {
+        // Arrange
+        String xml = "<root><person><n>John</n><age>30</age></person></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer("/root/person");
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        assertEquals("Result should contain name", "John", result.getString("n"));
+        assertEquals("Result should contain age", 30, result.getInt("age"));
+    }
+    
+    /**
+     * Test Case 2: Path with trailing slash
+     * 
+     * This tests that the method correctly handles paths with a trailing slash,
+     * which should be normalized according to the implementation.
+     */
+    @Test
+    public void testTrailingSlashNormalization() throws Exception {
+        // Arrange
+        String xml = "<root><data><items><item id=\"1\">First</item><item id=\"2\">Second</item></items></data></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer("/root/data/items/"); // Note the trailing slash
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        assertTrue("Result should contain item information", result.has("item"));
+    }
+    
+    /**
+     * Test Case 3: Empty path (return entire document)
+     * 
+     * This tests that when an empty path is provided, the entire XML document is
+     * converted to a JSONObject.
+     */
+    @Test
+    public void testEmptyPath() throws Exception {
+        // Arrange
+        String xml = "<root><simple>value</simple></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer(""); // Empty path
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        assertTrue("Should return the root element", result.has("root"));
+        JSONObject root = result.getJSONObject("root");
+        assertEquals("Root should contain simple element with value", "value", root.getString("simple"));
+    }
+    
+    /**
+     * Test Case 4: Path not found in document
+     * 
+     * This tests that the method throws a JSONException when the specified path
+     * does not exist in the XML document.
+     */
+    @Test(expected = JSONException.class)
+    public void testPathNotFound() throws Exception {
+        // Arrange
+        String xml = "<root><data>value</data></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer("/root/nonexistent");
+        
+        // Act - this should throw JSONException
+        JSONObject result = XML.toJSONObject(reader, path);
+    }
+
+
+
+    /* CHANGES 2 START HERE  */
+
+        /**
+     * Test Case 1: Replace the entire document
+     * 
+     * This tests replacing the entire XML document with a JSON object
+     * using an empty path or "/".
+     */
+    @Test
+    public void testReplaceEntireDocument() throws Exception {
+        // Arrange
+        String xml = "<root><data>value</data></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer(""); // Empty path
+        JSONObject replacement = new JSONObject()
+            .put("newRoot", new JSONObject()
+                .put("newData", "newValue"));
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path, replacement);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        assertTrue("Result should contain new root", result.has("newRoot"));
+        JSONObject newRoot = result.getJSONObject("newRoot");
+        assertEquals("New root should contain new data", "newValue", newRoot.getString("newData"));
+    }
+
+    /**
+     * Test Case 2: Replace a nested element (two-level deep path)
+     * 
+     * This tests replacing an element within a two-level deep path.
+     */
+    @Test
+    public void testReplaceNestedElement() throws Exception {
+        // Arrange
+        String xml = "<root><parent><child1>value1</child1><child2>value2</child2></parent></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer("/root/parent/child1");
+        JSONObject replacement = new JSONObject().put("updatedValue", "replaced");
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path, replacement);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        assertTrue("Result should contain parent", result.getJSONObject("root").has("parent"));
+        JSONObject parent = result.getJSONObject("root").getJSONObject("parent");
+        assertTrue("Parent should contain child1", parent.has("child1"));
+        assertEquals("Child1 should be replaced", replacement.toString(), parent.get("child1").toString());
+        assertEquals("Child2 should remain unchanged", "value2", parent.getString("child2"));
+    }
+    
+    /**
+     * Test Case 3: Replace deep nested element
+     * 
+     * This tests replacing a deeply nested element (more than two levels deep).
+     */
+    @Test
+    public void testReplaceDeepNestedElement() throws Exception {
+        // Arrange
+        String xml = "<root><level1><level2><level3><target>original</target></level3></level2></level1></root>";
+        StringReader reader = new StringReader(xml);
+        JSONPointer path = new JSONPointer("/root/level1/level2/level3/target");
+        JSONObject replacement = new JSONObject().put("newContent", "deep replacement");
+        
+        // Act
+        JSONObject result = XML.toJSONObject(reader, path, replacement);
+        
+        // Assert
+        assertNotNull("Result should not be null", result);
+        Object target = result.getJSONObject("root")
+                              .getJSONObject("level1")
+                              .getJSONObject("level2")
+                              .getJSONObject("level3")
+                              .get("target");
+        assertEquals("Deep target should be replaced", replacement.toString(), target.toString());
+    }
+
+
 }
 
 

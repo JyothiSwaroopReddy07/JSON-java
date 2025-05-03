@@ -863,6 +863,451 @@ public class XML {
         return toJSONObject(new StringReader(string), config);
     }
 
+     /**
+         * Convert a well-formed XML into a JSONObject, but only extract the portion
+         * specified by the JSONPointer path. This method tries to optimize parsing
+         * by using a streaming approach.
+         *
+         * @param reader The XML source reader.
+         * @param path The JSONPointer path to extract.
+         * @return A JSONObject containing the data at the specified path.
+         * @throws JSONException Thrown if there is an error while parsing or the path doesn't exist.
+         */
+        public static JSONObject toJSONObject(Reader reader, JSONPointer path) throws JSONException {
+
+            // Normalize the path to handle trailing slashes
+            String pathStr = path.toString();
+            if (pathStr.endsWith("/")) {
+                // Remove trailing slash and create a new JSONPointer
+                pathStr = pathStr.substring(0, pathStr.length() - 1);
+                path = new JSONPointer(pathStr);
+            }
+
+
+
+            // Strategy:
+            // 1. Parse the XML in chunks, storing only the current path
+            // 2. Once we've built enough of the object to satisfy the JSONPointer, return it
+
+            // First, get the path segments we're looking for
+            String[] pathSegments = getPathSegments(path.toString());
+
+            // Empty path case - just return the whole document
+            if (pathSegments.length == 0) {
+                return toJSONObject(reader);
+            }
+
+            // Create a wrapper reader that will track how much of the XML we've processed
+            CountingReader countingReader = new CountingReader(reader);
+            long lastPosition = 0;
+
+            // Create a temporary object to build our JSON
+            JSONObject tempObject = new JSONObject();
+
+            // This will hold our extracted result when found
+            JSONObject result = null;
+            boolean foundPath = false;
+
+            // Process the XML in chunks, checking after each top-level element
+            XMLParserConfiguration config = XMLParserConfiguration.ORIGINAL;
+            XMLTokener x = new XMLTokener(countingReader, config);
+
+            while (x.more() && !foundPath) {
+                // Skip to start of tag
+                x.skipPast("<");
+                if (!x.more()) {
+                    break;
+                }
+
+                // Parse the next top-level element
+                parse(x, tempObject, null, config, 0);
+
+                // Check if our path exists in what we've parsed so far
+                try {
+                    Object pathResult = path.queryFrom(tempObject);
+                    if (pathResult != null) {
+                        foundPath = true;
+
+                        // If the result is already a JSONObject, use it
+                        if (pathResult instanceof JSONObject) {
+                            result = (JSONObject) pathResult;
+                        } else {
+                            // Wrap non-JSONObject results
+                            result = new JSONObject();
+                            String lastSegment = pathSegments[pathSegments.length - 1];
+                            result.put(lastSegment, pathResult);
+                        }
+
+                        // We found what we're looking for, so stop parsing
+                        break;
+                    }
+                } catch (JSONPointerException e) {
+                    // Path not found yet, continue parsing
+                }
+
+                // Record how far we've processed
+                long currentPosition = countingReader.getPosition();
+                if (currentPosition == lastPosition) {
+                    // If we haven't made progress, avoid an infinite loop
+                    break;
+                }
+                lastPosition = currentPosition;
+            }
+
+            // If we found our path, return the result
+            if (foundPath && result != null) {
+                return result;
+            }
+
+            // If we've gone through the whole document and still haven't found the path
+            throw new JSONException("Path not found: " + path);
+        }
+
+        /**
+         * A Reader wrapper that keeps track of how many characters have been read.
+         */
+        private static class CountingReader extends Reader {
+            private final Reader wrapped;
+            private long position = 0;
+            
+            public CountingReader(Reader reader) {
+            this.wrapped = reader;
+        }
+            
+            public long getPosition() {
+            return position;
+        }
+            
+            @Override
+            public int read(char[] cbuf, int off, int len) throws IOException {
+                int result = wrapped.read(cbuf, off, len);
+                if (result > 0) {
+                position += result;
+            }
+                return result;
+            }
+            
+            @Override
+            public void close() throws IOException {
+                wrapped.close();
+            }
+        }
+        
+        
+        /**
+         * Helper method to split a JSONPointer path into segments.
+         * 
+         * @param pathStr The JSONPointer path string.
+         * @return Array of path segments.
+         */
+        private static String[] getPathSegments(String pathStr) {
+            if (pathStr == null || pathStr.isEmpty()) {
+                return new String[0];
+            }
+            
+            // Remove the leading slash if present
+            if (pathStr.startsWith("/")) {
+            pathStr = pathStr.substring(1);
+        }
+            
+            // Handle trailing slash by removing it
+            if (pathStr.endsWith("/")) {
+                pathStr = pathStr.substring(0, pathStr.length() - 1);
+            }
+            
+            // Empty path
+            if (pathStr.isEmpty()) {
+                return new String[0];
+            }
+            
+            // Split by '/' and unescape each segment
+            String[] parts = pathStr.split("/");
+            for (int i = 0; i < parts.length; i++) {
+                parts[i] = JSONPointer.unescapeToken(parts[i]);
+            }
+            
+            return parts;
+        }
+        
+        
+        
+        
+        
+        /**
+     * Convert a well-formed XML into a JSONObject, but only extract the portion
+     * specified by the JSONPointer path, and replace it with the provided replacement.
+     * This method optimizes the operation by avoiding full document parsing when possible.
+     *
+     * @param reader The XML source reader.
+     * @param path The JSONPointer path to the object to be replaced.
+     * @param replacement The JSONObject to replace the value at the specified path.
+     * @return A JSONObject containing the data with the specified path replaced.
+     * @throws JSONException Thrown if there is an error while parsing or the path doesn't exist.
+     */
+        public static JSONObject toJSONObject(Reader reader, JSONPointer path, JSONObject replacement) throws JSONException {
+        // Special case: if path is empty or "/", we're replacing the entire document
+        if (path.toString().isEmpty() || path.toString().equals("/")) {
+            // Still need to validate that the input is valid XML
+            XMLTokener x = new XMLTokener(reader, XMLParserConfiguration.ORIGINAL);
+            if (!x.more()) {
+                throw new JSONException("Empty XML document");
+            }
+            // If replacement is valid JSON, we can just return it
+            return replacement;
+        }
+        
+        // Normalize the path to handle trailing slashes
+        String pathStr = path.toString();
+        boolean hasTrailingSlash = pathStr.endsWith("/");
+        if (hasTrailingSlash) {
+            // Remove trailing slash and create a new JSONPointer
+            pathStr = pathStr.substring(0, pathStr.length() - 1);
+            path = new JSONPointer(pathStr);
+        }
+        
+        // Get path segments for more efficient processing
+        String[] pathSegments = getPathSegments(path.toString());
+        
+        // For shallow paths (one or two levels deep), we can optimize significantly
+        if (pathSegments.length <= 2) {
+            return performShallowPathReplacement(reader, pathSegments, replacement, hasTrailingSlash);
+        }
+        
+        // For deeper paths, we need a more general approach
+        JSONObject result = new JSONObject();
+        
+        // Create a wrapper reader that will track how much of the XML we've processed
+        CountingReader countingReader = new CountingReader(reader);
+        long lastPosition = 0;
+        
+        // Process the XML in chunks
+        XMLParserConfiguration config = XMLParserConfiguration.ORIGINAL;
+        XMLTokener x = new XMLTokener(countingReader, config);
+        
+        while (x.more()) {
+            // Skip to start of tag
+            x.skipPast("<");
+            if (!x.more()) {
+                break;
+            }
+            
+            // Parse the next top-level element
+            parse(x, result, null, config, 0);
+            
+            // Check if our path exists in what we've parsed so far
+            try {
+                // Get the parent object that contains our target
+                JSONPointer parentPath = getParentPath(path);
+                Object parent = parentPath.queryFrom(result);
+                
+                if (parent instanceof JSONObject) {
+                    // Get the key name for the target
+                    String lastSegment = pathSegments[pathSegments.length - 1];
+                    
+                    // Get the value to be replaced
+                    Object originalValue = ((JSONObject) parent).opt(lastSegment);
+                    
+                    // Handle the replacement based on whether there was a trailing slash
+                    if (hasTrailingSlash && originalValue != null) {
+                        // When path has trailing slash, we want to replace the content of the object
+                        // not wrap it in another object
+                        if (replacement.length() == 1) {
+                            // Get the first key from the replacement
+                            String firstKey = replacement.keys().next();
+                            // Use the value directly instead of the whole replacement object
+                            ((JSONObject) parent).put(lastSegment, replacement.get(firstKey));
+                        } else {
+                            ((JSONObject) parent).put(lastSegment, replacement);
+                        }
+                    } else {
+                        // Regular replacement
+                        ((JSONObject) parent).put(lastSegment, replacement);
+                    }
+                    
+                    // We've made the replacement, so we can stop
+                    break;
+                }
+            } catch (JSONPointerException e) {
+                // Path not found yet, continue parsing
+            }
+            
+            // Record how far we've processed
+            long currentPosition = countingReader.getPosition();
+            if (currentPosition == lastPosition) {
+                // If we haven't made progress, avoid an infinite loop
+                break;
+            }
+            lastPosition = currentPosition;
+        }
+        
+        // Verify that the replacement was made
+        try {
+            path.queryFrom(result);
+            return result;
+        } catch (JSONPointerException e) {
+            throw new JSONException("Path not found: " + path);
+        }
+    }
+        
+        /**
+     * Optimized replacement for shallow paths (one or two levels deep).
+     */
+        private static JSONObject performShallowPathReplacement(Reader reader, String[] pathSegments, JSONObject replacement, boolean hasTrailingSlash) throws JSONException {
+        JSONObject result = new JSONObject();
+        XMLParserConfiguration config = XMLParserConfiguration.ORIGINAL;
+        XMLTokener x = new XMLTokener(reader, config);
+        
+        // For a one-level path, we're replacing a top-level element
+        if (pathSegments.length == 1) {
+            String targetKey = pathSegments[0];
+            
+            while (x.more()) {
+                x.skipPast("<");
+                if (!x.more()) {
+                    break;
+                }
+                
+                Object token = x.nextToken();
+                if (token instanceof String) {
+                    String tagName = (String) token;
+                    
+                    if (tagName.equals(targetKey)) {
+                        // Found our target - skip its content and use replacement
+                        int depth = 1;
+                        while (depth > 0 && x.more()) {
+                            token = x.nextToken();
+                            if (token == LT) {
+                                if (x.nextToken() == SLASH) {
+                                    depth--;
+                                } else {
+                                    depth++;
+                                }
+                            }
+                        }
+                        
+                        // Add the replacement with the target key
+                        if (hasTrailingSlash && replacement.length() == 1) {
+                            // Get the first key from the replacement
+                            String firstKey = replacement.keys().next();
+                            // Use the value directly instead of the whole replacement object
+                            result.put(targetKey, replacement.get(firstKey));
+                        } else {
+                            result.put(targetKey, replacement);
+                        }
+                    } else {
+                        // Parse this element normally
+                        x.back();
+                        parse(x, result, null, config, 0);
+                    }
+                }
+            }
+        } 
+        // For a two-level path, we need to find the parent and replace the child
+        else if (pathSegments.length == 2) {
+            String parentKey = pathSegments[0];
+            String targetKey = pathSegments[1];
+            
+            while (x.more()) {
+                x.skipPast("<");
+                if (!x.more()) {
+                    break;
+                }
+                
+                Object token = x.nextToken();
+                if (token instanceof String) {
+                    String tagName = (String) token;
+                    
+                    if (tagName.equals(parentKey)) {
+                        // Found the parent - parse it but be ready to replace the target child
+                        JSONObject parentObj = new JSONObject();
+                        boolean foundTarget = false;
+                        
+                        // Skip attributes
+                        while (x.more() && token != GT) {
+                            token = x.nextToken();
+                        }
+                        
+                        // Process children
+                        while (x.more()) {
+                            token = x.nextContent();
+                            
+                            if (token == LT) {
+                                token = x.nextToken();
+                                
+                                if (token == SLASH) {
+                                    // End of parent
+                                    token = x.nextToken();
+                                    if (token.equals(parentKey)) {
+                                        break;
+                                    }
+                                } else if (token instanceof String) {
+                                    String childTagName = (String) token;
+                                    
+                                    if (childTagName.equals(targetKey)) {
+                                        // Found our target - skip its content and use replacement
+                                        foundTarget = true;
+                                        
+                                        if (hasTrailingSlash && replacement.length() == 1) {
+                                            // Get the first key from the replacement
+                                            String firstKey = replacement.keys().next();
+                                            // Use the value directly instead of the whole replacement object
+                                            parentObj.put(targetKey, replacement.get(firstKey));
+                                        } else {
+                                            parentObj.put(targetKey, replacement);
+                                        }
+                                        
+                                        // Skip to end of this child tag
+                                        int depth = 1;
+                                        while (depth > 0 && x.more()) {
+                                            token = x.nextToken();
+                                            if (token == LT) {
+                                                token = x.nextToken();
+                                                if (token == SLASH) {
+                                                    depth--;
+                                                } else {
+                                                    depth++;
+                                                    x.back();
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Parse this child element normally
+                                        x.back();
+                                        parse(x, parentObj, null, config, 0);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Add the parent with possibly modified children
+                        result.put(parentKey, parentObj);
+                    } else {
+                        // Parse this element normally
+                        x.back();
+                        parse(x, result, null, config, 0);
+                    }
+                }
+            }
+        }
+        
+        return result;
+    }
+        
+        /**
+     * Gets the parent path from a JSONPointer.
+     */
+        private static JSONPointer getParentPath(JSONPointer pointer) {
+        String pathStr = pointer.toString();
+        int lastSlash = pathStr.lastIndexOf('/');
+        
+        if (lastSlash <= 0) {
+            return new JSONPointer("");
+        }
+        
+        return new JSONPointer(pathStr.substring(0, lastSlash));
+    }
+
+
     /**
      * Convert a JSONObject into a well-formed, element-normal XML string.
      *
