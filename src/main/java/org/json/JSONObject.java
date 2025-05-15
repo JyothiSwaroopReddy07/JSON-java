@@ -17,6 +17,8 @@ import java.math.BigInteger;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * A JSONObject is an unordered collection of name/value pairs. Its external
@@ -3029,5 +3031,32 @@ public class JSONObject {
         }
         if (negativeFirstChar) {return "-0";}
         return "0";
+    }
+
+      /**
+     * Returns a stream of all JSON nodes in this object, including nested nodes.
+     * 
+     * @return A stream of JSONNode objects
+     */
+    public Stream<JSONNode> toStream() {
+        return StreamSupport.stream(new JSONNodeSpliterator(this, "", true, false), false);
+    }
+
+    /**
+     * Returns a stream of only the leaf JSON nodes in this object (nodes with primitive values).
+     * 
+     * @return A stream of leaf JSONNode objects
+     */
+    public Stream<JSONNode> toLeafStream() {
+        return StreamSupport.stream(new JSONNodeSpliterator(this, "", true, true), false);
+    }
+
+    /**
+     * Returns a stream of only the top-level JSON nodes in this object (not descending into nested objects).
+     * 
+     * @return A stream of top-level JSONNode objects
+     */
+    public Stream<JSONNode> toFlatStream() {
+        return StreamSupport.stream(new JSONNodeSpliterator(this, "", false, false), false);
     }
 }

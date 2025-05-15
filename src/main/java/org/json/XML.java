@@ -4,6 +4,7 @@ package org.json;
 Public Domain.
 */
 
+import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
@@ -1573,5 +1574,201 @@ public class XML {
             sb.append(' ');
         }
         return sb.toString();
+    }
+
+    /**
+     * Functional interface for transforming XML element keys.
+     */
+    @FunctionalInterface
+    public interface KeyTransformer {
+        /**
+         * Transforms an XML element key.
+         * 
+         * @param key The original XML element key
+         * @return The transformed key
+         */
+        String transform(String key);
+    }
+
+    /**
+     * Reads XML from a Reader and converts it to a JSONObject with streaming capabilities,
+     * applying a custom key transformation during the process.
+     * 
+     * @param reader The Reader containing XML data
+     * @param keyTransformer Function to transform keys during parsing
+     * @return A JSONObject containing the parsed XML data with transformed keys
+     * @throws JSONException If there is an error parsing the XML
+     */
+    public static JSONObject toJSONObject(Reader reader, KeyTransformer keyTransformer) throws JSONException {
+        JSONObject jo = new JSONObject();
+        XMLTokener x = new XMLTokener(reader);
+        while (x.more()) {
+            x.skipPast("<");
+            if(x.more()) {
+                parse(x, jo, null, keyTransformer);
+            }
+        }
+        return jo;
+    }
+    
+    /**
+     * Modified parse method that applies key transformations during XML parsing.
+     * This method handles special XML structures like CDATA, comments, and nested elements.
+     * 
+     * @param x The XMLTokener
+     * @param context The JSONObject
+     * @param name The name
+     * @param keyTransformer The key transformation function
+     * @return A JSONObject
+     * @throws JSONException If syntax errors are found
+     */
+    private static Object parse(XMLTokener x, JSONObject context, String name, KeyTransformer keyTransformer) throws JSONException {
+        char c;
+        String string;
+        String tagName;
+        Object token;
+
+        token = x.nextToken();
+
+        if (token == BANG) {
+            c = x.next();
+            if (c == '-') {
+                if (x.next() == '-') {
+                    x.skipPast("-->");
+                    return false;
+                }
+                x.back();
+            } else if (c == '[') {
+                token = x.nextToken();
+                if ("CDATA".equals(token)) {
+                    if (x.next() == '[') {
+                        String cdata = x.nextCDATA();
+                        if (cdata.length() > 0) {
+                            String transformedName = (name != null && keyTransformer != null)
+                                    ? keyTransformer.transform(name)
+                                    : name;
+                            context.put(transformedName, cdata);
+                        }
+                        return false;
+                    }
+                }
+                throw x.syntaxError("Expected 'CDATA['");
+            }
+            skipMeta(x);
+            return false;
+        } else if (token == QUEST) {
+            x.skipPast("?>");
+            return false;
+        } else if (token == SLASH) {
+            token = x.nextToken();
+            if (name == null || !token.equals(name)) {
+                throw x.syntaxError("Mismatched close tag " + token);
+            }
+            if (x.nextToken() != GT) {
+                throw x.syntaxError("Misshaped close tag");
+            }
+            return true;
+        } else if (token instanceof Character) {
+            throw x.syntaxError("Misshaped tag");
+        } else {
+            tagName = (String) token;
+            token = null;
+            JSONObject jsonobject = new JSONObject();
+
+            while (true) {
+                if (token == null) {
+                    token = x.nextToken();
+                }
+
+                if (token instanceof String) {
+                    string = (String) token;
+                    token = x.nextToken();
+                    if (token == EQ) {
+                        token = x.nextToken();
+                        if (!(token instanceof String)) {
+                            throw x.syntaxError("Missing value");
+                        }
+
+                        String transformedAttrName = keyTransformer != null
+                                ? keyTransformer.transform("@" + string)
+                                : "@" + string;
+
+                        jsonobject.put(transformedAttrName, token);
+                        token = null;
+                    } else {
+                        jsonobject.put("content", string);
+                    }
+                } else if (token == SLASH) {
+                    if (x.nextToken() != GT) {
+                        throw x.syntaxError("Misshaped tag");
+                    }
+
+                    String transformedTagName = keyTransformer != null ? keyTransformer.transform(tagName) : tagName;
+
+                    if (jsonobject.length() > 0) {
+                        context.put(transformedTagName, jsonobject);
+                    } else {
+                        context.put(transformedTagName, "");
+                    }
+                    return false;
+                } else if (token == GT) {
+                    while (true) {
+                        token = x.nextContent();
+                        if (token == null) {
+                            if (tagName != null) {
+                                throw x.syntaxError("Unclosed tag " + tagName);
+                            }
+                            return false;
+                        } else if (token instanceof String) {
+                            string = (String) token;
+                            if (string.length() > 0) {
+                                jsonobject.put("content", string);
+                            }
+                        } else if (token == LT) {
+                            if ((boolean) parse(x, jsonobject, tagName, keyTransformer)) {
+                                String transformedTagName = keyTransformer != null ? keyTransformer.transform(tagName) : tagName;
+
+                                if (context.has(transformedTagName)) {
+                                    Object existingValue = context.get(transformedTagName);
+                                    if (existingValue instanceof JSONArray) {
+                                        ((JSONArray) existingValue).put(jsonobject);
+                                    } else {
+                                        JSONArray array = new JSONArray();
+                                        array.put(existingValue);
+                                        array.put(jsonobject);
+                                        context.put(transformedTagName, array);
+                                    }
+                                } else {
+                                    context.put(transformedTagName, jsonobject);
+                                }
+                                return false;
+                            }
+                        }
+                    }
+                } else {
+                    throw x.syntaxError("Misshaped tag");
+                }
+            }
+        }
+    }
+
+    /**
+     * Helper method to skip meta content inside &lt;! ... &gt;.
+     *
+     * @param x The XMLTokener to process.
+     * @throws JSONException If there is an error while parsing.
+     */
+    private static void skipMeta(XMLTokener x) throws JSONException {
+        int depth = 1;
+        while (depth > 0) {
+            Object token = x.nextMeta();
+            if (token == null) {
+                throw x.syntaxError("Missing '>' after '<!'.");
+            } else if (token == LT) {
+                depth++;
+            } else if (token == GT) {
+                depth--;
+            }
+        }
     }
 }
