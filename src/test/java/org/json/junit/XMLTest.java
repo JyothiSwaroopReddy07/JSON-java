@@ -1818,6 +1818,46 @@ public class XMLTest {
     }
 
 
+    @Test
+    public void testKeyTransformerUppercase() {
+        String xml = "<root><child attr=\"1\">val</child></root>";
+        JSONObject result = toJSONObject(new StringReader(xml), key -> key.toUpperCase());
+
+        assertTrue(result.has("ROOT"));
+        JSONObject root = result.getJSONObject("ROOT");
+        JSONObject child = root.getJSONObject("CHILD");
+
+        assertEquals("1", child.getString("@ATTR"));
+        assertEquals("val", child.getString("content"));
+    }
+
+    @Test
+    public void testKeyTransformerWithPrefix() {
+        String xml = "<person age=\"30\"><name>Aman</name><active>true</active></person>";
+
+        JSONObject result = toJSONObject(new StringReader(xml), key -> "SWE262_" + key);
+
+        assertTrue(result.has("SWE262_person"));
+
+        JSONObject person = result.getJSONObject("SWE262_person");
+
+        // Check attribute key with prefix
+        assertEquals("30", person.getString("SWE262_@age"));
+
+        // Check child elements with prefix
+        assertEquals("Aman", person.getJSONObject("SWE262_name").getString("content"));
+        assertEquals("true", person.getJSONObject("SWE262_active").getString("content"));
+    }
+
+    private JSONObject toJSONObject(StringReader reader, KeyTransformer transformer) {
+        try {
+            return XML.toJSONObject(reader, transformer); // replace with actual class name
+        } catch (JSONException e) {
+            fail("JSONException occurred: " + e.getMessage());
+            return null;
+        }
+    }
+
 }
 
 
