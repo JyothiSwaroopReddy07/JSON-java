@@ -10,6 +10,9 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Iterator;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 
 /**
  * This provides static methods to convert an XML text into a JSONObject, and to
@@ -63,6 +66,31 @@ public class XML {
      * Represents the XML attribute name for specifying type information.
      */
     public static final String TYPE_ATTR = "xsi:type";
+
+//    Asynchronous function to handle large files
+    public static void toJSONObjectAsync(
+            Reader reader,
+            Consumer<JSONObject> onSuccess,
+            Consumer<Exception> onError) {
+
+        CompletableFuture
+                .supplyAsync(() -> {
+                    try {
+                        return XML.toJSONObject(reader); // existing sync method
+                    } catch (Exception e) {
+                        throw new CompletionException(e);
+                    }
+                })
+                .thenAccept(onSuccess)
+                .exceptionally(ex -> {
+                    if (ex instanceof CompletionException && ex.getCause() instanceof Exception) {
+                        onError.accept((Exception) ex.getCause());
+                    } else {
+                        onError.accept(new Exception(ex));
+                    }
+                    return null;
+                });
+    }
 
     /**
      * Creates an iterator for navigating Code Points in a string instead of
@@ -119,6 +147,7 @@ public class XML {
      *            The string to be escaped.
      * @return The escaped string.
      */
+
     public static String escape(String string) {
         StringBuilder sb = new StringBuilder(string.length());
         for (final int cp : codePointIterator(string)) {

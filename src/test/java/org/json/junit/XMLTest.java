@@ -4,13 +4,6 @@ package org.json.junit;
 Public Domain.
 */
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-import static org.junit.Assert.assertNotNull;
-
 
 import java.io.File;
 import java.io.FileReader;
@@ -24,6 +17,9 @@ import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.json.*;
@@ -31,6 +27,8 @@ import org.json.XML.KeyTransformer;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+
+import static org.junit.Assert.*;
 
 
 /**
@@ -55,6 +53,53 @@ public class XMLTest {
         String xmlStr = null;
         JSONObject jsonObject = XML.toJSONObject(xmlStr);
         assertTrue("jsonObject should be empty", jsonObject.isEmpty());
+    }
+
+//    New tests for Async operations as per milestone 5
+    @Test
+    public void testToJSONObjectAsync_Success() throws Exception {
+        String xml = "<person><name>Jane</name><age>30</age></person>";
+        Reader reader = new StringReader(xml);
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<JSONObject> resultRef = new AtomicReference<>();
+        AtomicReference<Exception> exceptionRef = new AtomicReference<>();
+
+        XML.toJSONObjectAsync(reader,
+                jo -> {
+                    resultRef.set(jo);
+                    latch.countDown();
+                },
+                e -> {
+                    exceptionRef.set(e);
+                    latch.countDown();
+                });
+
+        // Wait up to 2 seconds
+        assertTrue(latch.await(2, TimeUnit.SECONDS));
+
+        assertNull("No exception should have occurred", exceptionRef.get());
+        JSONObject jo = resultRef.get();
+        assertNotNull(jo);
+        assertEquals("Jane", jo.getJSONObject("person").getString("name"));
+        assertEquals(30, jo.getJSONObject("person").getInt("age"));
+    }
+
+    @Test
+    public void testToJSONObjectAsync_Failure() throws Exception {
+        String invalidXml = "<person><name>John</name>"; // missing closing tag
+        Reader reader = new StringReader(invalidXml);
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<Exception> exceptionRef = new AtomicReference<>();
+
+        XML.toJSONObjectAsync(reader,
+                jo -> fail("Should not succeed with malformed XML"),
+                e -> {
+                    exceptionRef.set(e);
+                    latch.countDown();
+                });
+
+        assertTrue(latch.await(2, TimeUnit.SECONDS));
+        assertNotNull("Exception should have been triggered", exceptionRef.get());
     }
 
     /**
